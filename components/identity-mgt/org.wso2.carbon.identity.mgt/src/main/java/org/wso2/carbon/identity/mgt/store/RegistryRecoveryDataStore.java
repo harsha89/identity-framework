@@ -22,6 +22,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.wso2.carbon.context.PrivilegedCarbonContext;
 import org.wso2.carbon.identity.base.IdentityException;
+import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
 import org.wso2.carbon.identity.mgt.IdentityMgtConfig;
 import org.wso2.carbon.identity.mgt.constants.IdentityMgtConstants;
 import org.wso2.carbon.identity.mgt.dto.UserRecoveryDataDO;
@@ -48,6 +49,8 @@ public class RegistryRecoveryDataStore implements UserRecoveryDataStore {
     public void store(UserRecoveryDataDO recoveryDataDO) throws IdentityException {
         Registry registry = null;
         try {
+            String tenantDomain = IdentityTenantUtil.getTenantDomain(recoveryDataDO.getTenantId());
+            IdentityTenantUtil.initializeRegistry(recoveryDataDO.getTenantId(), tenantDomain);
             registry = IdentityMgtServiceComponent.getRegistryService().
                     getConfigSystemRegistry(PrivilegedCarbonContext.getThreadLocalCarbonContext().getTenantId());
             registry.beginTransaction();
@@ -87,7 +90,9 @@ public class RegistryRecoveryDataStore implements UserRecoveryDataStore {
         UserRecoveryDataDO dataDO = new UserRecoveryDataDO();
 
         try {
-
+            int tenantId = PrivilegedCarbonContext.getThreadLocalCarbonContext().getTenantId();
+            String tenantDomain = IdentityTenantUtil.getTenantDomain(tenantId);
+            IdentityTenantUtil.initializeRegistry(tenantId, tenantDomain);
             registry = IdentityMgtServiceComponent.getRegistryService().
                     getConfigSystemRegistry(PrivilegedCarbonContext.getThreadLocalCarbonContext().getTenantId());
 
@@ -271,25 +276,42 @@ public class RegistryRecoveryDataStore implements UserRecoveryDataStore {
             }
         }
 
+        boolean isTransactionSucceeded = false;
         try {
             if (collection != null) {
                 String[] resources = collection.getChildren();
                 for (String resource : resources) {
+                    isTransactionSucceeded = false;
                     String[] splittedResource = resource.split("___");
                     if (splittedResource.length == 3) {
                         //PRIMARY USER STORE
                         if (resource.contains("___" + userNameToValidate.toLowerCase() + "___")) {
-
-                            registry.beginTransaction();
-                            // Check whether the resource still exists for concurrent cases.
-                            if (registry.resourceExists(resource)) {
-                                registry.delete(resource);
-                                registry.commitTransaction();
-                            } else {
-                                // Already deleted by another thread. Do nothing.
-                                registry.rollbackTransaction();
+                            try {
+                                registry.beginTransaction();
+                                // Check whether the resource still exists for concurrent cases.
+                                if (registry.resourceExists(resource)) {
+                                    registry.delete(resource);
+                                    isTransactionSucceeded = true;
+                                } else {
+                                    // Already deleted by another thread. Do nothing.
+                                    if (log.isDebugEnabled()) {
+                                        log.debug("Confirmation code already deleted in path of resource : " + resource);
+                                    }
+                                }
+                            } catch (RegistryException e) {
+                                log.warn("Error while deleting the old confirmation code \n" + e);
                                 if (log.isDebugEnabled()) {
-                                    log.debug("Confirmation code already deleted in path of resource : " + resource);
+                                    log.debug(e.getMessage(), e);
+                                }
+                            } finally {
+                                try {
+                                    if (isTransactionSucceeded) {
+                                        registry.commitTransaction();
+                                    } else {
+                                        registry.rollbackTransaction();
+                                    }
+                                } catch (RegistryException e) {
+                                    log.error("Error while processing registry transaction", e);
                                 }
                             }
                         }

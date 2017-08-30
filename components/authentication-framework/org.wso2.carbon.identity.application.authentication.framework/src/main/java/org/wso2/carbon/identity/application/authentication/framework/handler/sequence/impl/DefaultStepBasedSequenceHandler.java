@@ -47,6 +47,7 @@ import org.wso2.carbon.identity.user.profile.mgt.UserProfileException;
 import org.wso2.carbon.idp.mgt.IdentityProviderManagementException;
 import org.wso2.carbon.user.api.UserStoreException;
 import org.wso2.carbon.user.core.UserCoreConstants;
+import org.wso2.carbon.user.core.util.UserCoreUtil;
 import org.wso2.carbon.utils.multitenancy.MultitenantUtils;
 import org.wso2.carbon.user.core.UserRealm;
 import org.wso2.carbon.user.core.UserStoreManager;
@@ -63,6 +64,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 
 public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler {
 
@@ -397,7 +400,6 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
                 Map<String, String> extAttibutesValueMap;
                 Map<String, String> localClaimValues = null;
                 Map<String, String> idpClaimValues = null;
-                List<String> locallyMappedUserRoles = null;
 
                 extAttrs = stepConfig.getAuthenticatedUser().getUserAttributes();
                 extAttibutesValueMap = FrameworkUtils.getClaimMappings(extAttrs, false);
@@ -621,6 +623,21 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
             if (subjectValue != null) {
                 sequenceConfig.getAuthenticatedUser().setAuthenticatedSubjectIdentifier(subjectValue);
 
+                // Check whether the tenant domain should be appended to the subject identifier for this SP and if yes,
+                // append it.
+                if (sequenceConfig.getApplicationConfig().isUseTenantDomainInLocalSubjectIdentifier()) {
+                    sequenceConfig.getAuthenticatedUser().setAuthenticatedSubjectIdentifier(UserCoreUtil
+                            .addTenantDomainToEntry(subjectValue, sequenceConfig.getAuthenticatedUser()
+                                    .getTenantDomain()));
+                }
+
+                // Check whether the user store domain should be appended to the subject identifier for this SP and
+                // if yes, append it.
+                if (sequenceConfig.getApplicationConfig().isUseUserstoreDomainInLocalSubjectIdentifier()) {
+                    sequenceConfig.getAuthenticatedUser().setAuthenticatedSubjectIdentifier(UserCoreUtil
+                            .addDomainToName(subjectValue, sequenceConfig.getAuthenticatedUser().getUserStoreDomain()));
+                }
+
                 if (log.isDebugEnabled()) {
                     log.debug("Authenticated User: " +
                             sequenceConfig.getAuthenticatedUser().getAuthenticatedSubjectIdentifier());
@@ -748,20 +765,27 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
     }
 
     /**
-     * @param sequenceConfig
+     * Map the external IDP roles to local roles.
+     * If excludeUnmapped is true exclude unmapped roles.
+     * Otherwise include unmapped roles as well.
+     *
      * @param externalIdPConfig
      * @param extAttributesValueMap
-     * @return
+     * @param idpRoleClaimUri
+     * @param excludeUnmapped
+     * @return ArrayList<string>
      */
-    protected List<String> getLocallyMappedUserRoles(SequenceConfig sequenceConfig,
-                                                     ExternalIdPConfig externalIdPConfig,
-                                                     Map<String, String> extAttributesValueMap,
-                                                     String idpRoleClaimUri) throws FrameworkException {
-
+    protected List<String> getIdentityProvideMappedUserRoles(ExternalIdPConfig externalIdPConfig,
+                                                 Map<String, String> extAttributesValueMap,
+                                                 String idpRoleClaimUri,
+                                                 Boolean excludeUnmapped) throws FrameworkException {
 
         if (idpRoleClaimUri == null) {
-            // we cannot do role mapping.
-            log.debug("Role claim uri not found for the identity provider");
+            // Since idpRoleCalimUri is not defined cannot do role mapping.
+            if (log.isDebugEnabled()) {
+                log.debug("Role claim uri is not configured for the external IDP: " + externalIdPConfig.getIdPName()
+                        + ", in Domain: " + externalIdPConfig.getDomain() + ".");
+            }
             return new ArrayList<>();
         }
 
@@ -772,39 +796,40 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
         if (idpRoleAttrValue != null) {
             idpRoles = idpRoleAttrValue.split(",");
         } else {
-            // no identity provider role values found.
+            // No identity provider role values found.
+            if (log.isDebugEnabled()) {
+                log.debug("No role attribute value has received from the external IDP: "
+                        + externalIdPConfig.getIdPName() + ", in Domain: " + externalIdPConfig.getDomain() + ".");
+            }
             return new ArrayList<>();
         }
 
-        // identity provider role to local role.
         Map<String, String> idpToLocalRoleMapping = externalIdPConfig.getRoleMappings();
 
-        boolean roleMappingDefined = false;
+        List<String> idpMappedUserRoles = new ArrayList<>();
+        // If no role mapping is configured in the identity provider.
+        if (MapUtils.isEmpty(idpToLocalRoleMapping)) {
+            if (log.isDebugEnabled()) {
+                log.debug("No role mapping is configured in the external IDP: "
+                        + externalIdPConfig.getIdPName() + ", in Domain: " + externalIdPConfig.getDomain() + ".");
+            }
 
-        if (idpToLocalRoleMapping != null && !idpToLocalRoleMapping.isEmpty()) {
-            // if no role mapping defined in the identity provider configuration
-            // - we will just
-            // pass-through the roles.
-            roleMappingDefined = true;
+            if (excludeUnmapped) {
+                return new ArrayList<>();
+            }
+
+            idpMappedUserRoles.addAll(Arrays.asList(idpRoles));
+            return idpMappedUserRoles;
         }
 
-        List<String> locallyMappedUserRoles = new ArrayList<>();
-
-        if (idpRoles.length > 0) {
-            for (String idpRole : idpRoles) {
-                if (roleMappingDefined) {
-                    if (idpToLocalRoleMapping.containsKey(idpRole)) {
-                        locallyMappedUserRoles.add(idpToLocalRoleMapping.get(idpRole));
-                    } else {
-                        locallyMappedUserRoles.add(idpRole);
-                    }
-                } else {
-                    locallyMappedUserRoles.add(idpRole);
-                }
+        for (String idpRole : idpRoles){
+            if (idpToLocalRoleMapping.containsKey(idpRole)) {
+                idpMappedUserRoles.add(idpToLocalRoleMapping.get(idpRole));
+            } else if (!excludeUnmapped) {
+                idpMappedUserRoles.add(idpRole);
             }
         }
-
-        return locallyMappedUserRoles;
+        return idpMappedUserRoles;
     }
 
     /**

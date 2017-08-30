@@ -256,7 +256,7 @@ public class ApplicationManagementServiceImpl extends ApplicationManagementServi
             startTenantFlow(MultitenantConstants.SUPER_TENANT_DOMAIN_NAME);
 
             IdentityServiceProviderCacheKey cacheKey = new IdentityServiceProviderCacheKey(
-                    tenantDomain, serviceProvider.getApplicationName());
+                    serviceProvider.getApplicationName(), tenantDomain);
 
             IdentityServiceProviderCache.getInstance().clearCacheEntry(cacheKey);
 
@@ -755,21 +755,17 @@ public class ApplicationManagementServiceImpl extends ApplicationManagementServi
         ApplicationDAO appDAO = ApplicationMgtSystemConfig.getInstance().getApplicationDAO();
         ServiceProvider serviceProvider = appDAO.getApplication(appId);
 
+        if (serviceProvider == null){
+            throw new IdentityApplicationManagementException(
+                    "Error while getting the service provider for appId: " + appId);
+        }
         String serviceProviderName = serviceProvider.getApplicationName();
         String tenantDomain = serviceProvider.getOwner().getTenantDomain();
 
         try {
             startTenantFlow(tenantDomain);
-            if (serviceProvider != null) {
-                loadApplicationPermissions(serviceProviderName, serviceProvider);
-            }
+            loadApplicationPermissions(serviceProviderName, serviceProvider);
 
-            if (serviceProvider == null
-                && ApplicationManagementServiceComponent.getFileBasedSPs().containsKey(
-                    serviceProviderName)) {
-                serviceProvider = ApplicationManagementServiceComponent.getFileBasedSPs().get(
-                        serviceProviderName);
-            }
         } finally {
             endTenantFlow();
         }
@@ -819,7 +815,7 @@ public class ApplicationManagementServiceImpl extends ApplicationManagementServi
             startTenantFlow(MultitenantConstants.SUPER_TENANT_DOMAIN_NAME);
 
             IdentityServiceProviderCacheKey cacheKey = new IdentityServiceProviderCacheKey(
-                    tenantDomain, serviceProviderName);
+                    serviceProviderName, tenantDomain);
             IdentityServiceProviderCacheEntry entry = IdentityServiceProviderCache.getInstance().
                     getValueFromCache(cacheKey);
 
@@ -868,7 +864,7 @@ public class ApplicationManagementServiceImpl extends ApplicationManagementServi
             startTenantFlow(MultitenantConstants.SUPER_TENANT_DOMAIN_NAME);
 
             IdentityServiceProviderCacheKey cacheKey = new IdentityServiceProviderCacheKey(
-                    tenantDomain, serviceProviderName);
+                    serviceProviderName, tenantDomain);
             IdentityServiceProviderCacheEntry entry = new IdentityServiceProviderCacheEntry();
             entry.setServiceProvider(serviceProvider);
             IdentityServiceProviderCache.getInstance().addToCache(cacheKey, entry);

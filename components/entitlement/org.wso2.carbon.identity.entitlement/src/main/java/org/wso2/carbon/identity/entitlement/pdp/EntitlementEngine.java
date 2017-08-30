@@ -59,8 +59,6 @@ import org.wso2.carbon.utils.CarbonUtils;
 import org.wso2.carbon.utils.multitenancy.MultitenantConstants;
 import org.xml.sax.SAXException;
 
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.parsers.ParserConfigurationException;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
@@ -70,6 +68,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
 
 public class EntitlementEngine {
 
@@ -99,10 +99,6 @@ public class EntitlementEngine {
 
     public PolicyCache getPolicyCache() {
         return policyCache;
-    }
-
-    public void setPolicyCache(PolicyCache policyCache) {
-        this.policyCache = policyCache;
     }
 
     public void clearDecisionCache() {
@@ -539,6 +535,15 @@ public class EntitlementEngine {
                 simpleDecisionCache.clearCache();
             }*/
 
+            // Check whether the policy cache is invalidated, if so clear the decision cache.
+            if (EntitlementEngine.getInstance().getPolicyCache().isInvalidate()) {
+                if (log.isDebugEnabled()) {
+                    log.debug("Policy Cache is invalidated. Clearing the decision cache.");
+                }
+                decisionCache.clear();
+                return null;
+            }
+
             if (simpleCache) {
                 decision = simpleDecisionCache.getFromCache(tenantRequest);
             } else {
@@ -634,6 +639,30 @@ public class EntitlementEngine {
         carbonPolicyFinder.setModules(policyModules);
         carbonPolicyFinder.init();
 
+    }
+
+    /**
+     * Check reset cache state
+     */
+    public void resetCacheInvalidateState() {
+
+        if (policyCache != null) {
+            policyCache.resetCacheInvalidateState();
+        } else {
+            log.error("Policy cache is null - Unable to reset cache invalidate state.");
+        }
+    }
+
+    /**
+     * Checking the policy cache status before cache invalidation
+     */
+    public void invalidatePolicyCache() {
+
+        if (policyCache != null) {
+            policyCache.invalidateCache();
+        } else {
+            log.error("Policy cache is null - Unable to invalidate cache.");
+        }
     }
 
 }

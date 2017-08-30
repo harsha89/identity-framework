@@ -52,20 +52,30 @@
     }
 </script>
 <%
+    IdentityProvider residentIdentityProvider = (IdentityProvider) session.getAttribute("ResidentIdentityProvider");
+    if (residentIdentityProvider == null) {
+%>
+<script type="text/javascript">
+    location.href = "idp-mgt-edit-load-local.jsp";
+</script>
+<%
+} else {
     String DEFAULT = "DEFAULT";
     String cookie = (String) session.getAttribute(ServerConstants.ADMIN_SERVICE_COOKIE);
     String backendServerURL = CarbonUIUtil.getServerURL(config.getServletContext(), session);
+    final String governanceAdminServiceClass = "org.wso2.carbon.identity.governance.IdentityGovernanceAdminService";
     ConfigurationContext configContext = (ConfigurationContext) config.getServletContext()
             .getAttribute(CarbonConstants.CONFIGURATION_CONTEXT);
     IdentityGovernanceAdminClient client = new IdentityGovernanceAdminClient(cookie, backendServerURL, configContext);
-   Map<String, Map<String, List<ConnectorConfig>>> catMap = client.getConnectorList();
+    Map<String, Map<String, List<ConnectorConfig>>> catMap = new HashMap<String, Map<String, List<ConnectorConfig>>>();
+    try {
+        Class.forName(governanceAdminServiceClass);
+        catMap = client.getConnectorList();
+    } catch (ClassNotFoundException e) {
+        // Fix APIMANAGER-5713 - issue due to removing jars of admin service
+        // Intentionally skipping handling the exception for class not found for admin service.
+    }
 
-%>
-
-
-<%
-    IdentityProvider residentIdentityProvider =
-            (IdentityProvider)session.getAttribute("ResidentIdentityProvider");
     String homeRealmId = residentIdentityProvider.getHomeRealmId();
     String openidUrl = null;
     String idPEntityId = null;
@@ -804,7 +814,7 @@ function idpMgtCancel(){
             </div>
 <%
             }
-        }
+    }
 %>
 
 </form>
@@ -819,3 +829,4 @@ function idpMgtCancel(){
         </div>
     </div>
 </fmt:bundle>
+<% } %>
