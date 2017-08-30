@@ -181,6 +181,16 @@
         <jsp-file>/registration.jsp</jsp-file>
     </servlet>
 
+    <servlet>
+        <servlet-name>register.do</servlet-name>
+        <jsp-file>/register.jsp</jsp-file>
+    </servlet>
+
+    <servlet-mapping>
+        <servlet-name>register.do</servlet-name>
+        <url-pattern>/register.do</url-pattern>
+    </servlet-mapping>
+
     <servlet-mapping>
         <servlet-name>retry.do</servlet-name>
         <url-pattern>/retry.do</url-pattern>

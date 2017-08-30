@@ -22,6 +22,7 @@ import org.apache.commons.collections.MapUtils;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.http.client.utils.URIBuilder;
 import org.wso2.carbon.identity.application.authentication.framework.ApplicationAuthenticator;
 import org.wso2.carbon.identity.application.authentication.framework.FederatedApplicationAuthenticator;
 import org.wso2.carbon.identity.application.authentication.framework.config.ConfigurationFacade;
@@ -33,6 +34,7 @@ import org.wso2.carbon.identity.application.authentication.framework.config.mode
 import org.wso2.carbon.identity.application.authentication.framework.context.AuthenticationContext;
 import org.wso2.carbon.identity.application.authentication.framework.exception.FrameworkException;
 import org.wso2.carbon.identity.application.authentication.framework.handler.sequence.StepBasedSequenceHandler;
+import org.wso2.carbon.identity.application.authentication.framework.internal.FrameworkServiceComponent;
 import org.wso2.carbon.identity.application.authentication.framework.model.AuthenticatedUser;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkConstants;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkUtils;
@@ -43,11 +45,18 @@ import org.wso2.carbon.identity.application.mgt.ApplicationConstants;
 import org.wso2.carbon.identity.user.profile.mgt.UserProfileAdmin;
 import org.wso2.carbon.identity.user.profile.mgt.UserProfileException;
 import org.wso2.carbon.idp.mgt.IdentityProviderManagementException;
+import org.wso2.carbon.user.api.UserStoreException;
 import org.wso2.carbon.user.core.UserCoreConstants;
 import org.wso2.carbon.utils.multitenancy.MultitenantUtils;
+import org.wso2.carbon.user.core.UserRealm;
+import org.wso2.carbon.user.core.UserStoreManager;
+import org.wso2.carbon.user.core.service.RealmService;
+import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -85,11 +94,11 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
     @Override
     public void handle(HttpServletRequest request, HttpServletResponse response,
                        AuthenticationContext context) throws FrameworkException {
-
+        boolean isPasswordBasedProvisioningFlow = false;
         if (log.isDebugEnabled()) {
             log.debug("Executing the Step Based Authentication...");
         }
-
+        String username = "";
         while (!context.getSequenceConfig().isCompleted()) {
 
             int currentStep = context.getCurrentStep();
@@ -101,7 +110,6 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
             }
 
             StepConfig stepConfig = context.getSequenceConfig().getStepMap().get(currentStep);
-
             // if the current step is completed
             if (stepConfig != null && stepConfig.isCompleted()) {
                 stepConfig.setCompleted(false);
@@ -155,7 +163,110 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
                         log.debug("Request is successfully authenticated");
                     }
 
+                    Map<String, String> localClaimValues = null;
+
                     context.getSequenceConfig().setCompleted(true);
+                        if(FrameworkConstants.IS_PASSWORD_BASED_PROVISIONING_ENABLED) {
+                            boolean isUserExist = false;
+                            boolean fedarationFlow = false;
+                            boolean isJitProvisioningEnabled = false;
+                            SequenceConfig sequenceConfig = context.getSequenceConfig();
+                        for (Map.Entry<Integer, StepConfig> entry : sequenceConfig.getStepMap().entrySet()) {
+                            StepConfig config = entry.getValue();
+                            AuthenticatorConfig authenticatorConfig = config.getAuthenticatedAutenticator();
+                            ApplicationAuthenticator authenticator = authenticatorConfig
+                                    .getApplicationAuthenticator();
+                            if(authenticator instanceof FederatedApplicationAuthenticator) {
+                                fedarationFlow = true;
+                                ExternalIdPConfig externalIdPConfig = null;
+                                try {
+                                    externalIdPConfig = ConfigurationFacade.getInstance()
+                                            .getIdPConfigByName(config.getAuthenticatedIdP(),
+                                                       context.getTenantDomain());
+                                    context.setExternalIdP(externalIdPConfig);
+                                } catch (IdentityProviderManagementException e) {
+                                    new FrameworkException("Error while checking user existence", e);
+                                }
+                                Map<ClaimMapping, String> extAttrs;
+                                Map<String, String> extAttibutesValueMap;
+                                Map<String, String> idpClaimValues = null;
+                                List<String> locallyMappedUserRoles = null;
+                                Map<String, String> mappedAttrs = new HashMap<>();
+                                isJitProvisioningEnabled = externalIdPConfig.isProvisioningEnabled();
+                                extAttrs = config.getAuthenticatedUser().getUserAttributes();
+                                extAttibutesValueMap = FrameworkUtils.getClaimMappings(extAttrs, false);
+
+                                if (config.isSubjectIdentifierStep()) {
+                                    username = config.getAuthenticatedUser().getAuthenticatedSubjectIdentifier();
+                                    try {
+                                        String provisioningUserStoreId = externalIdPConfig.getProvisioningUserStoreId();
+                                        RealmService realmService = FrameworkServiceComponent.getRealmService();
+                                        UserRealm realm = (UserRealm) realmService.getTenantUserRealm(IdentityTenantUtil.getTenantId(context.getTenantDomain()));
+                                        String userStoreDomain = getUserStoreDomain(provisioningUserStoreId, realm);
+                                        UserStoreManager userStoreManager = getUserStoreManager(realm, userStoreDomain);
+                                        String tenantAwareUsername = MultitenantUtils.getTenantAwareUsername(username);
+                                        isUserExist = userStoreManager.isExistingUser(tenantAwareUsername);
+                                        if (isUserExist) {
+                                            break;
+                                        }
+                                    } catch (UserStoreException e) {
+                                        new FrameworkException("Error while checking user existence", e);
+                                    }
+                                }
+                                if(config.isSubjectAttributeStep()) {
+                                    if (config.isSubjectAttributeStep()) {
+                                        String idpRoleClaimUri = getIdpRoleClaimUri(externalIdPConfig);
+
+                                        locallyMappedUserRoles = getLocallyMappedUserRoles(sequenceConfig,
+                                                externalIdPConfig, extAttibutesValueMap, idpRoleClaimUri);
+
+                                        if (idpRoleClaimUri != null && getServiceProviderMappedUserRoles(sequenceConfig,
+                                                locallyMappedUserRoles) != null) {
+                                            extAttibutesValueMap.put(idpRoleClaimUri, getServiceProviderMappedUserRoles(sequenceConfig,
+                                                    locallyMappedUserRoles));
+                                        }
+
+                                        if (mappedAttrs == null || mappedAttrs.isEmpty()) {
+                                            // do claim handling
+                                            handleClaimMappings(config, context,
+                                                    extAttibutesValueMap, true);
+                                            // external claim values mapped to local claim uris.
+                                            localClaimValues = (Map<String, String>) context
+                                                    .getProperty(FrameworkConstants.UNFILTERED_LOCAL_CLAIM_VALUES);
+
+                                        }
+
+                                    }
+                                }
+                            }
+                        }
+
+                        if(!isUserExist && fedarationFlow && isJitProvisioningEnabled) {
+                            try {
+                                URIBuilder uriBuilder = new URIBuilder("/authenticationendpoint/register.do");
+                                uriBuilder.addParameter(FrameworkConstants.SESSION_DATA_KEY,
+                                        context.getContextIdentifier());
+                                if(localClaimValues != null) {
+                                    for(Map.Entry<String, String> entry : localClaimValues.entrySet()) {
+                                        uriBuilder.addParameter(entry.getKey(), entry.getValue());
+                                    }
+                                }
+                                uriBuilder.addParameter("spName",
+                                        context.getSequenceConfig().getApplicationConfig().getApplicationName());
+                                response.sendRedirect(uriBuilder.build().toString());
+                                if (log.isDebugEnabled()) {
+                                    log.debug("Redirecting to outside to pick mandatory claims");
+                                }
+                                isPasswordBasedProvisioningFlow = true;
+                                context.setProperty(FrameworkConstants.PASSWORD_PROVISIONING_TRIGGERED, true);
+                                continue;
+                            } catch (IOException e) {
+                                throw new FrameworkException("Error while redirecting to request claims", e);
+                            } catch (URISyntaxException e) {
+                                throw new FrameworkException("Error while building redirect URI", e);
+                            }
+                        }
+                    }
                     handlePostAuthentication(request, response, context);
 
                 }
@@ -185,6 +296,16 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
             context.setReturning(false);
         }
 
+        Object passwordBasedProvisioningTriggered = context.getProperty(FrameworkConstants.PASSWORD_PROVISIONING_TRIGGERED);
+        boolean passwordBasedProvisioningTriggeredBool = false;
+        if(passwordBasedProvisioningTriggered != null) {
+            passwordBasedProvisioningTriggeredBool = (Boolean) passwordBasedProvisioningTriggered;
+        }
+
+        if (passwordBasedProvisioningTriggeredBool && !isPasswordBasedProvisioningFlow) {
+            handlePostAuthentication(request, response, context);
+            context.setProperty(FrameworkConstants.PASSWORD_PROVISIONING_TRIGGERED, false);
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -196,6 +317,16 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
             log.debug("Handling Post Authentication tasks");
         }
 
+        Object passwordBasedProvisioningTriggeredProp = context.getProperty(FrameworkConstants.PASSWORD_PROVISIONING_TRIGGERED);
+        boolean passwordBasedProvisioningTriggered = false;
+        if(passwordBasedProvisioningTriggeredProp != null) {
+            passwordBasedProvisioningTriggered = (Boolean) passwordBasedProvisioningTriggeredProp;
+        }
+
+        String password ="";
+        if (passwordBasedProvisioningTriggered) {
+            password = request.getParameter(FrameworkConstants.PASSWORD);
+        }
         SequenceConfig sequenceConfig = context.getSequenceConfig();
         StringBuilder jsonBuilder = new StringBuilder();
 
@@ -270,6 +401,55 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
 
                 extAttrs = stepConfig.getAuthenticatedUser().getUserAttributes();
                 extAttibutesValueMap = FrameworkUtils.getClaimMappings(extAttrs, false);
+
+                if (stepConfig.isSubjectAttributeStep()) {
+
+                    subjectAttributesFoundInStep = true;
+
+                    String idpRoleClaimUri = getIdpRoleClaimUri(externalIdPConfig);
+
+                    locallyMappedUserRoles = getLocallyMappedUserRoles(sequenceConfig,
+                            externalIdPConfig, extAttibutesValueMap, idpRoleClaimUri);
+
+                    if (idpRoleClaimUri != null && getServiceProviderMappedUserRoles(sequenceConfig,
+                            locallyMappedUserRoles) != null) {
+                        extAttibutesValueMap.put(idpRoleClaimUri, getServiceProviderMappedUserRoles(sequenceConfig,
+                                locallyMappedUserRoles));
+                    }
+
+                    if (mappedAttrs == null || mappedAttrs.isEmpty()) {
+                        // do claim handling
+                        mappedAttrs = handleClaimMappings(stepConfig, context,
+                                extAttibutesValueMap, true);
+                        // external claim values mapped to local claim uris.
+                        localClaimValues = (Map<String, String>) context
+                                .getProperty(FrameworkConstants.UNFILTERED_LOCAL_CLAIM_VALUES);
+                        if(passwordBasedProvisioningTriggered) {
+                            Map<String, String> newLocalClaimValues = new HashMap<>();
+                            for(Map.Entry<String, String> claim : localClaimValues.entrySet()) {
+                                newLocalClaimValues.put(claim.getKey(), request.getParameter(claim.getKey()));
+                            }
+                            localClaimValues = newLocalClaimValues;
+                        }
+                        idpClaimValues = (Map<String, String>) context
+                                .getProperty(FrameworkConstants.UNFILTERED_IDP_CLAIM_VALUES);
+                    }
+
+                }
+
+                // do user provisioning. we should provision the user with the original external
+                // subject identifier.
+                if (externalIdPConfig.isProvisioningEnabled()) {
+
+                    if (localClaimValues == null) {
+                        localClaimValues = new HashMap<>();
+                    }
+                    localClaimValues.put(FrameworkConstants.ASSOCIATED_ID, originalExternalIdpSubjectValueForThisStep);
+                    localClaimValues.put(FrameworkConstants.IDP_ID, stepConfig.getAuthenticatedIdP());
+                    localClaimValues.put(FrameworkConstants.PASSWORD, password);
+                    handleJitProvisioning(originalExternalIdpSubjectValueForThisStep, context,
+                            locallyMappedUserRoles, localClaimValues);
+                }
 
                 if (stepConfig.isSubjectIdentifierStep()) {
                     // there can be only step for subject attributes.
@@ -381,33 +561,7 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
 
                 }
 
-                if (stepConfig.isSubjectAttributeStep()) {
-
-                    subjectAttributesFoundInStep = true;
-
-                    String idpRoleClaimUri = getIdpRoleClaimUri(externalIdPConfig);
-
-                    locallyMappedUserRoles = getLocallyMappedUserRoles(sequenceConfig,
-                            externalIdPConfig, extAttibutesValueMap, idpRoleClaimUri);
-
-                    if (idpRoleClaimUri != null && getServiceProviderMappedUserRoles(sequenceConfig,
-                            locallyMappedUserRoles) != null) {
-                        extAttibutesValueMap.put(idpRoleClaimUri, getServiceProviderMappedUserRoles(sequenceConfig,
-                                locallyMappedUserRoles));
-                    }
-
-                    if (mappedAttrs == null || mappedAttrs.isEmpty()) {
-                        // do claim handling
-                        mappedAttrs = handleClaimMappings(stepConfig, context,
-                                extAttibutesValueMap, true);
-                        // external claim values mapped to local claim uris.
-                        localClaimValues = (Map<String, String>) context
-                                .getProperty(FrameworkConstants.UNFILTERED_LOCAL_CLAIM_VALUES);
-
-                        idpClaimValues = (Map<String, String>) context
-                                .getProperty(FrameworkConstants.UNFILTERED_IDP_CLAIM_VALUES);
-                    }
-
+                if(stepConfig.isSubjectAttributeStep()) {
                     if (!sequenceConfig.getApplicationConfig().isMappedSubjectIDSelected()) {
                         // if we found the mapped subject - then we do not need to worry about
                         // finding attributes.
@@ -424,21 +578,7 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
                         }
                         authenticatedUserAttributes = FrameworkUtils.buildClaimMappings(mappedAttrs);
                     }
-
                 }
-
-                // do user provisioning. we should provision the user with the original external
-                // subject identifier.
-                if (externalIdPConfig.isProvisioningEnabled()) {
-
-                    if (localClaimValues == null) {
-                        localClaimValues = new HashMap<>();
-                    }
-
-                    handleJitProvisioning(originalExternalIdpSubjectValueForThisStep, context,
-                            locallyMappedUserRoles, localClaimValues);
-                }
-
             } else {
 
                 if (stepConfig.isSubjectIdentifierStep()) {
@@ -734,6 +874,41 @@ public class DefaultStepBasedSequenceHandler implements StepBasedSequenceHandler
         } finally {
             IdentityApplicationManagementUtil.resetThreadLocalProvisioningServiceProvider();
         }
+    }
+
+    /**
+     * Compute the user store which user to be provisioned
+     *
+     * @return
+     * @throws org.wso2.carbon.user.core.UserStoreException
+     */
+    private String getUserStoreDomain(String userStoreDomain, UserRealm realm)
+            throws FrameworkException, org.wso2.carbon.user.core.UserStoreException {
+
+        // If the any of above value is invalid, keep it empty to use primary userstore
+        if (userStoreDomain != null
+                && realm.getUserStoreManager().getSecondaryUserStoreManager(userStoreDomain) == null) {
+            throw new FrameworkException("Specified user store domain " + userStoreDomain
+                    + " is not valid.");
+        }
+
+        return userStoreDomain;
+    }
+
+    private UserStoreManager getUserStoreManager(UserRealm realm, String userStoreDomain)
+            throws org.wso2.carbon.user.core.UserStoreException, FrameworkException {
+        UserStoreManager userStoreManager;
+        if (userStoreDomain != null && !userStoreDomain.isEmpty()) {
+            userStoreManager = realm.getUserStoreManager().getSecondaryUserStoreManager(
+                    userStoreDomain);
+        } else {
+            userStoreManager = realm.getUserStoreManager();
+        }
+
+        if (userStoreManager == null) {
+            throw new FrameworkException("Specified user store is invalid");
+        }
+        return userStoreManager;
     }
 
     protected void resetAuthenticationContext(AuthenticationContext context)

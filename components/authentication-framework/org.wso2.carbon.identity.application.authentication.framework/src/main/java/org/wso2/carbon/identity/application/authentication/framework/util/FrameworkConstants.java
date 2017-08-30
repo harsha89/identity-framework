@@ -67,7 +67,13 @@ public abstract class FrameworkConstants {
     public static final String POST_AUTHENTICATION_EXTENSION_COMPLETED = "postAuthenticationExtensionCompleted";
     public static final String POST_AUTHENTICATION_REDIRECTION_TRIGGERED = "postAuthenticationRedirectionTriggered";
     public static final String MISSING_CLAIMS = "missingClaims";
+    public static final String CLAIMS = "claims";
     public static final String MAPPED_ATTRIBUTES = "MappedAttributes";
+    public static final String PASSWORD = "password";
+    public static final String PASSWORD_PROVISIONING_TRIGGERED = "PasswordProvisioningTriggered";
+    public static final String IDP_ID = "IdpId";
+    public static final String ASSOCIATED_ID = "associatedID";
+    public static final boolean IS_PASSWORD_BASED_PROVISIONING_ENABLED = true;
 
     private FrameworkConstants() {
 

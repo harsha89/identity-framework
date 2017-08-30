@@ -22,6 +22,7 @@ import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.xpath.operations.Bool;
 import org.wso2.carbon.CarbonConstants;
 import org.wso2.carbon.context.PrivilegedCarbonContext;
 import org.wso2.carbon.identity.application.authentication.framework.AuthenticationDataPublisher;
@@ -40,6 +41,7 @@ import org.wso2.carbon.identity.application.authentication.framework.model.Authe
 import org.wso2.carbon.identity.application.authentication.framework.model.CommonAuthResponseWrapper;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkConstants;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkUtils;
+import org.wso2.carbon.identity.application.mgt.ApplicationConstants;
 import org.wso2.carbon.idp.mgt.util.IdPManagementUtil;
 import org.wso2.carbon.registry.core.utils.UUIDGenerator;
 import org.wso2.carbon.utils.multitenancy.MultitenantConstants;
@@ -127,13 +129,19 @@ public class DefaultAuthenticationRequestHandler implements AuthenticationReques
             FrameworkUtils.getStepBasedSequenceHandler().handle(request, response, context);
         }
 
-        if (context.getSequenceConfig().isCompleted() && !isPostAuthenticationExtensionCompleted(context)) {
+        Object passwordBasedProvisioningTriggered = context.getProperty(FrameworkConstants.PASSWORD_PROVISIONING_TRIGGERED);
+        boolean passwordBasedProvisioningTriggeredBool = false;
+        if(passwordBasedProvisioningTriggered != null) {
+            passwordBasedProvisioningTriggeredBool = (Boolean) passwordBasedProvisioningTriggered;
+        }
+
+        if (context.getSequenceConfig().isCompleted() && !isPostAuthenticationExtensionCompleted(context) && !passwordBasedProvisioningTriggeredBool) {
             // call post authentication handler
             FrameworkUtils.getPostAuthenticationHandler().handle(request, response, context);
         }
 
         // if flow completed, send response back
-        if (isPostAuthenticationExtensionCompleted(context)) {
+         if (isPostAuthenticationExtensionCompleted(context)) {
             concludeFlow(request, response, context);
         } else { // redirecting outside
             FrameworkUtils.addAuthenticationContextToCache(context.getContextIdentifier(), context);

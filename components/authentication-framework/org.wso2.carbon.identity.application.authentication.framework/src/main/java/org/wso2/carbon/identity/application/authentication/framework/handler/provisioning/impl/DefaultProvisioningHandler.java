@@ -23,12 +23,18 @@ import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.wso2.carbon.CarbonException;
+import org.wso2.carbon.context.PrivilegedCarbonContext;
 import org.wso2.carbon.core.util.AnonymousSessionUtil;
 import org.wso2.carbon.core.util.PermissionUpdateUtil;
 import org.wso2.carbon.identity.application.authentication.framework.exception.FrameworkException;
 import org.wso2.carbon.identity.application.authentication.framework.handler.provisioning.ProvisioningHandler;
 import org.wso2.carbon.identity.application.authentication.framework.internal.FrameworkServiceComponent;
+import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkConstants;
+import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkUtils;
+import org.wso2.carbon.identity.application.mgt.ApplicationConstants;
 import org.wso2.carbon.identity.core.util.IdentityUtil;
+import org.wso2.carbon.identity.user.profile.mgt.UserProfileAdmin;
+import org.wso2.carbon.identity.user.profile.mgt.UserProfileException;
 import org.wso2.carbon.registry.core.service.RegistryService;
 import org.wso2.carbon.user.core.UserCoreConstants;
 import org.wso2.carbon.user.core.UserRealm;
@@ -103,6 +109,13 @@ public class DefaultProvisioningHandler implements ProvisioningHandler {
             // addingRoles = newRoles AND allExistingRoles
             Collection<String> addingRoles = getRolesToAdd(userStoreManager, newRoles);
 
+            String password = attributes.get(FrameworkConstants.PASSWORD);
+            String idpValue = attributes.get(FrameworkConstants.IDP_ID);
+            String subjectVal = attributes.get(FrameworkConstants.ASSOCIATED_ID);
+            attributes.remove(FrameworkConstants.IDP_ID);
+            attributes.remove(FrameworkConstants.ASSOCIATED_ID);
+            attributes.remove(FrameworkConstants.PASSWORD);
+
             Map<String, String> userClaims = prepareClaimMappings(attributes);
 
             if (userStoreManager.isExistingUser(username)) {
@@ -135,9 +148,29 @@ public class DefaultProvisioningHandler implements ProvisioningHandler {
 
             } else {
 
-                userStoreManager.addUser(username, generatePassword(), addingRoles.toArray(
-                        new String[addingRoles.size()]), userClaims, null);
-
+                if (!StringUtils.isEmpty(password)) {
+                    userStoreManager.addUser(username, password, addingRoles.toArray(
+                            new String[addingRoles.size()]), userClaims, null);
+                } else {
+                    userStoreManager.addUser(username, generatePassword(), addingRoles.toArray(
+                            new String[addingRoles.size()]), userClaims, null);
+                }
+                // start tenant flow
+                try {
+                    FrameworkUtils.startTenantFlow(tenantDomain);
+                    username = IdentityUtil.addDomainToName(username, userStoreDomain);
+                    PrivilegedCarbonContext.getThreadLocalCarbonContext().setUsername(username);
+                    if(!StringUtils.isEmpty(idpValue) && !StringUtils.isEmpty(username)) {
+                        UserProfileAdmin userProfileAdmin = UserProfileAdmin.getInstance();
+                        userProfileAdmin.associateID(idpValue, username);
+                    }
+                } catch (UserProfileException e) {
+                    throw new FrameworkException("Error while associated Idp for ID"
+                            + subjectVal, e);
+                } finally {
+                     // end tenant flow
+                     FrameworkUtils.endTenantFlow();
+                }
                 if (log.isDebugEnabled()) {
                     log.debug("Federated user: " + username
                               + " is provisioned by authentication framework with roles : "
